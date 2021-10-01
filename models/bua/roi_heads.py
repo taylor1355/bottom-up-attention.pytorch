@@ -176,6 +176,15 @@ class BUACaffeRes5ROIHeads(ROIHeads):
                         return proposal_boxes, outputs.predict_probs(), feature_pooled.split(num_preds_per_image, dim=0)
                 elif self.extractor_mode == 2:
                     return outputs.predict_boxes(), outputs.predict_probs()
+                elif self.extractor_mode == 4:
+                    if self.attr_on:
+                        return (
+                            proposal_boxes,
+                            outputs.predict_boxes(),
+                            outputs.predict_probs(), 
+                            feature_pooled.split(num_preds_per_image, dim=0), 
+                            attr_scores.split(num_preds_per_image, dim=0)
+                            )
                 else:
                     raise ValueError('BUA.EXTRATOR.MODE ERROR')
             pred_instances, _ = outputs.inference(

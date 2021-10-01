@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import cv2
 import os
+import pdb 
 
 from models.bua.layers.nms import nms
 from models.bua.box_regression import BUABoxes
@@ -142,6 +143,7 @@ def save_bbox(args, cfg, im_file, im, dataset_dict, boxes, scores):
     np.savez_compressed(output_file, bbox=image_bboxes, num_bbox=len(keep_boxes), image_h=np.size(im, 0), image_w=np.size(im, 1))
 
 def save_roi_features_by_bbox(args, cfg, im_file, im, dataset_dict, boxes, scores, features_pooled, attr_scores=None):
+    # pdb.set_trace()
     MIN_BOXES = cfg.MODEL.BUA.EXTRACTOR.MIN_BOXES
     MAX_BOXES = cfg.MODEL.BUA.EXTRACTOR.MAX_BOXES
     CONF_THRESH = cfg.MODEL.BUA.EXTRACTOR.CONF_THRESH
@@ -158,8 +160,9 @@ def save_roi_features_by_bbox(args, cfg, im_file, im, dataset_dict, boxes, score
         attr_scores = attr_scores[0]
         image_attrs_conf = np.max(attr_scores[keep_boxes].numpy()[:,1:], axis=1)
         image_attrs = np.argmax(attr_scores[keep_boxes].numpy()[:,1:], axis=1)
+        image_id = im_file.split('.')[0] if isinstance(im_file, str) else str(im_file)
         info = {
-            'image_id': im_file.split('.')[0],
+            'image_id': image_id,
             'image_h': np.size(im, 0),
             'image_w': np.size(im, 1),
             'num_boxes': len(keep_boxes),
@@ -170,13 +173,13 @@ def save_roi_features_by_bbox(args, cfg, im_file, im, dataset_dict, boxes, score
             }
     else:
         info = {
-            'image_id': im_file.split('.')[0],
+            'image_id': image_id,
             'image_h': np.size(im, 0),
             'image_w': np.size(im, 1),
             'num_boxes': len(keep_boxes),
             'objects_id': image_objects,
             'objects_conf': image_objects_conf
             }
-
-    output_file = os.path.join(args.output_dir, im_file.split('.')[0])
+    # pdb.set_trace()
+    output_file = os.path.join(args.output_dir, image_id)
     np.savez_compressed(output_file, x=image_feat, bbox=image_bboxes, num_bbox=len(keep_boxes), image_h=np.size(im, 0), image_w=np.size(im, 1), info=info) 

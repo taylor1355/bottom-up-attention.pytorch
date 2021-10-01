@@ -13,6 +13,7 @@ import pdb
 # import tqdm
 import cv2
 import numpy as np
+import pickle
 sys.path.append('detectron2')
 
 import detectron2.utils.comm as comm
@@ -32,6 +33,18 @@ from models.bua.layers.nms import nms
 
 import ray
 from ray.actor import ActorHandle
+
+def read_pickle(path):
+    with open(path, 'rb') as handle:
+        return pickle.load(handle, encoding='latin1')
+
+def read_label_mapper(path):
+    d = {}
+    with open(path, 'r') as handle:
+        for line in handle:
+            code, labels = line.strip().split(': ')
+            d[code] = labels.strip().split(',')
+    return d
 
 def switch_extract_mode(mode, add_proposal_generator=False):
     if mode == 'roi_feats':
@@ -131,7 +144,7 @@ def prune_extractions(cfg, dataset_dict, boxes_list, scores_list):
     return image_bboxes, keep_boxes
 
 # @ray.remote(num_gpus=1)
-def extract_feat(split_idx, img_list, cfg, args, actor: ActorHandle):
+def extract_feat(split_idx, img_list, cfg, args, actor: ActorHandle, root_idx):
     num_images = len(img_list)
     print('Number of images on split{}: {}.'.format(split_idx, num_images))
 
@@ -141,119 +154,60 @@ def extract_feat(split_idx, img_list, cfg, args, actor: ActorHandle):
     )
     model.eval()
 
-    for im_file in (img_list):
-        # if os.path.exists(os.path.join(args.output_dir, im_file.split('.')[0]+'.npz')):
+    for idx, im_file in enumerate(img_list):
+        # pdb.set_trace()
+        im = im_file#.transpose(2, 0, 1)
+        # im = cv2.imread(os.path.join(args.image_dir, im_file))
+        # if im is None:
+        #     print(os.path.join(args.image_dir, im_file), "is illegal!")
         #     actor.update.remote(1)
         #     continue
-        im = cv2.imread(os.path.join(args.image_dir, im_file))
-        if im is None:
-            print(os.path.join(args.image_dir, im_file), "is illegal!")
-            actor.update.remote(1)
-            continue
         dataset_dict = get_image_blob(im, cfg.MODEL.PIXEL_MEAN)
-        # extract roi features
-        if cfg.MODEL.BUA.EXTRACTOR.MODE == 1:
-            attr_scores = None
-            with torch.set_grad_enabled(False):
-                if cfg.MODEL.BUA.ATTRIBUTE_ON:
-                    boxes, scores, features_pooled, attr_scores = model([dataset_dict])
-                else:
-                    boxes, scores, features_pooled = model([dataset_dict])
-            boxes = [box.tensor.cpu() for box in boxes]
-            scores = [score.cpu() for score in scores]
-            features_pooled = [feat.cpu() for feat in features_pooled]
-            if not attr_scores is None:
-                attr_scores = [attr_score.cpu() for attr_score in attr_scores]
-            generate_npz(1, 
-                args, cfg, im_file, im, dataset_dict, 
-                boxes, scores, features_pooled, attr_scores)
-        # extract bbox only
-        elif cfg.MODEL.BUA.EXTRACTOR.MODE == 2:
-            with torch.set_grad_enabled(False):
-                # pdb.set_trace()
-                boxes, scores = model([dataset_dict])
-            boxes = [box.cpu() for box in boxes]
-            scores = [score.cpu() for score in scores]
-            generate_npz(2,
-                args, cfg, im_file, im, dataset_dict, 
-                boxes, scores)
-        # extract roi features by bbox
-        elif cfg.MODEL.BUA.EXTRACTOR.MODE == 3:
-            if not os.path.exists(os.path.join(args.bbox_dir, im_file.split('.')[0]+'.npz')):
-                actor.update.remote(1)
-                continue
-            bbox = torch.from_numpy(np.load(os.path.join(args.bbox_dir, im_file.split('.')[0]+'.npz'))['bbox']) * dataset_dict['im_scale']
-            proposals = Instances(dataset_dict['image'].shape[-2:])
-            proposals.proposal_boxes = BUABoxes(bbox)
-            dataset_dict['proposals'] = proposals
-
-            attr_scores = None
-            with torch.set_grad_enabled(False):
-                if cfg.MODEL.BUA.ATTRIBUTE_ON:
-                    boxes, scores, features_pooled, attr_scores = model([dataset_dict])
-                else:
-                    boxes, scores, features_pooled = model([dataset_dict])
-            boxes = [box.tensor.cpu() for box in boxes]
-            scores = [score.cpu() for score in scores]
-            features_pooled = [feat.cpu() for feat in features_pooled]
-            if not attr_scores is None:
-                attr_scores = [attr_score.data.cpu() for attr_score in attr_scores]
-            generate_npz(3, 
-                args, cfg, im_file, im, dataset_dict, 
-                boxes, scores, features_pooled, attr_scores)
-        elif cfg.MODEL.BUA.EXTRACTOR.MODE == 4:
-            # pdb.set_trace()
-            cfg = setup(args, add_proposal_generator=False)
-            model = DefaultTrainer.build_model(cfg)
-            DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
-                cfg.MODEL.WEIGHTS, resume=args.resume
+        
+        # pdb.set_trace()
+        cfg = setup(args, add_proposal_generator=False)
+        model = DefaultTrainer.build_model(cfg)
+        DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
+            cfg.MODEL.WEIGHTS, resume=args.resume
+        )
+        model.eval()
+        with torch.set_grad_enabled(False):
+            _, boxes, scores, old_feats, old_attrs = model([dataset_dict])
+        boxes = [box.cpu() for box in boxes]
+        scores = [score.cpu() for score in scores]
+        
+        pruned_bboxes, keep_indices = prune_extractions(
+            cfg, dataset_dict, boxes, scores
             )
-            model.eval()
-            with torch.set_grad_enabled(False):
-                # boxes, scores = model([dataset_dict])
-                _, boxes, scores, old_feats, old_attrs = model([dataset_dict])
-            boxes = [box.cpu() for box in boxes]
-            scores = [score.cpu() for score in scores]
-            
-            pruned_bboxes, keep_indices = prune_extractions(
-                cfg, dataset_dict, boxes, scores
-                )
 
-            # generate_npz(2,
-            #     args, cfg, im_file, im, dataset_dict, 
-            #     boxes, scores)
-            cfg = setup(args, add_proposal_generator=True)
-            model = DefaultTrainer.build_model(cfg)
-            DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
-                cfg.MODEL.WEIGHTS, resume=args.resume
-            )
-            model.eval()
-            # pdb.set_trace()
-            # if not os.path.exists(os.path.join(args.bbox_dir, im_file.split('.')[0]+'.npz')):
-            #     actor.update.remote(1)
-            #     continue
-            # bbox = torch.from_numpy(np.load(os.path.join(args.bbox_dir, im_file.split('.')[0]+'.npz'))['bbox']) * dataset_dict['im_scale']
-            bbox = pruned_bboxes * dataset_dict['im_scale']
-            proposals = Instances(dataset_dict['image'].shape[-2:])
-            proposals.proposal_boxes = BUABoxes(bbox)
-            dataset_dict['proposals'] = proposals
-            # pdb.set_trace()
-            attr_scores = None
-            with torch.set_grad_enabled(False):
-                if cfg.MODEL.BUA.ATTRIBUTE_ON:
-                    new_boxes, _, new_scores, features_pooled, attr_scores = model([dataset_dict])
-                else:
-                    boxes, _, scores, features_pooled = model([dataset_dict])
-            # pdb.set_trace()
-            new_boxes = [box.tensor.cpu() for box in new_boxes]
-            new_scores = [score.cpu() for score in new_scores]
-            features_pooled = [feat.cpu() for feat in features_pooled]
-            if not attr_scores is None:
-                attr_scores = [attr_score.data.cpu() for attr_score in attr_scores]
-            # pdb.set_trace()
-            generate_npz(3, 
-                args, cfg, im_file, im, dataset_dict, 
-                new_boxes, new_scores, features_pooled, attr_scores)
+        cfg = setup(args, add_proposal_generator=True)
+        model = DefaultTrainer.build_model(cfg)
+        DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
+            cfg.MODEL.WEIGHTS, resume=args.resume
+        )
+        model.eval()
+        
+        bbox = pruned_bboxes * dataset_dict['im_scale']
+        proposals = Instances(dataset_dict['image'].shape[-2:])
+        proposals.proposal_boxes = BUABoxes(bbox)
+        dataset_dict['proposals'] = proposals
+        # pdb.set_trace()
+        attr_scores = None
+        with torch.set_grad_enabled(False):
+            if cfg.MODEL.BUA.ATTRIBUTE_ON:
+                new_boxes, _, new_scores, features_pooled, attr_scores = model([dataset_dict])
+            else:
+                boxes, _, scores, features_pooled = model([dataset_dict])
+        # pdb.set_trace()
+        new_boxes = [box.tensor.cpu() for box in new_boxes]
+        new_scores = [score.cpu() for score in new_scores]
+        features_pooled = [feat.cpu() for feat in features_pooled]
+        if not attr_scores is None:
+            attr_scores = [attr_score.data.cpu() for attr_score in attr_scores]
+        # pdb.set_trace()
+        generate_npz(3, 
+            args, cfg, root_idx + idx, im, dataset_dict, 
+            new_boxes, new_scores, features_pooled, attr_scores)
             
 
 
@@ -288,12 +242,13 @@ def main():
     parser.add_argument('--out-dir', dest='output_dir',
                         help='output directory for features',
                         default="features")
-    parser.add_argument('--image-dir', dest='image_dir',
+    parser.add_argument('--input-dir', dest='input_dir',
                         help='directory with images',
                         default="image")
     parser.add_argument('--bbox-dir', dest='bbox_dir',
                         help='directory with bbox',
                         default="bbox")
+    parser.add_argument('--keep-k', dest='keep_k', default=10)
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -317,30 +272,44 @@ def main():
     MAX_BOXES = cfg.MODEL.BUA.EXTRACTOR.MAX_BOXES
     CONF_THRESH = cfg.MODEL.BUA.EXTRACTOR.CONF_THRESH
 
-    # Extract features.
-    imglist = os.listdir(args.image_dir)[:5]
-    num_images = len(imglist)
-    print('Number of images: {}.'.format(num_images))
+    # Specify File Names
+    data_dir = vars(args)['input_dir']
+    train_file = os.path.join(data_dir, 'miniImageNet_category_split_train_phase_train.pickle')
+    # train_file = os.path.join(data_dir, 'vg_pickle.pickle')
+    dev_file = os.path.join(data_dir, 'miniImageNet_category_split_val.pickle')
+    test_file = os.path.join(data_dir, 'miniImageNet_category_split_test.pickle')
+    map_file = os.path.join(data_dir, 'label_code2name.txt')
+    # Read Data
+    train_data = read_pickle(train_file)
+    code2label = read_label_mapper(map_file)
+    keep_k = vars(args)['keep_k']
 
-    # if args.num_cpus != 0:
-    #     ray.init(num_cpus=args.num_cpus)
-    # else:
-    #     ray.init()
-    img_lists = [imglist[i::num_gpus] for i in range(num_gpus)]
-
-    pb = ProgressBar(len(imglist))
-    actor = pb.actor
-
-    print('Number of GPUs: {}.'.format(num_gpus))
-    extract_feat_list = []
+    class2images = {}
+    for image, label in zip(train_data['data'], train_data['labels']):
+        if label not in class2images:
+            class2images[label] = []
+        if len(class2images[label]) < keep_k: 
+            class2images[label].append(image)
     # pdb.set_trace()
-    for i in range(num_gpus):
-        extract_feat_list.append(extract_feat(i, img_lists[i], cfg, args, actor))
-    
-    pb.print_until_done()
-    
-    # ray.get(extract_feat_list)
-    # ray.get(actor.get_counter.remote())
+    num_images = len(train_data['data'][:keep_k])
+    print('Number of images: {}.'.format(num_images))
+    output_dir = args.output_dir
+    for class_idx, images in class2images.items():
+        img_lists = [images[i::num_gpus] for i in range(num_gpus)]
+        # pdb.set_trace()
+        pb = ProgressBar(num_images)
+        actor = pb.actor
+
+        print('Number of GPUs: {}.'.format(num_gpus))
+        extract_feat_list = []
+        root_idx = 0
+        args.output_dir = os.path.join(output_dir, str(class_idx))
+        os.makedirs(args.output_dir, exist_ok=True)
+        for i in range(num_gpus):
+            extract_feat_list.append(extract_feat(i, img_lists[i], cfg, args, actor, root_idx))
+            root_idx += len(img_lists[i])
+        
+        pb.print_until_done()
 
 if __name__ == "__main__":
     main()

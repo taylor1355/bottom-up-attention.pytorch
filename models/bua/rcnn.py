@@ -3,6 +3,7 @@ import logging, os
 import torch
 from torch import nn
 import torch.nn.functional as F
+import pdb
 
 from detectron2.structures import ImageList
 from detectron2.utils.logger import log_first_n
@@ -123,13 +124,14 @@ class GeneralizedBUARCNN(nn.Module):
 
         images = self.preprocess_image(batched_inputs)
         features = self.backbone(images.tensor)
-
+        # pdb.set_trace()
         if self.resnet_version == 2:
             for f in features:
                 out = self.roi_heads.res5[0].norm(features[f])
                 features[f] = F.relu_(out)
 
         if detected_instances is None:
+            # pdb.set_trace()
             if self.proposal_generator:
                 proposals, _ = self.proposal_generator(images, features, None)
             else:

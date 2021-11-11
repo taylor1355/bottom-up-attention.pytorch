@@ -137,6 +137,7 @@ class BUACaffeRes5ROIHeads(ROIHeads):
         image_scales = images.image_scales
         del images
 
+        self.training = False
         if self.training:
             proposals = self.label_and_sample_proposals(proposals, targets)
         del targets
@@ -181,8 +182,8 @@ class BUACaffeRes5ROIHeads(ROIHeads):
                         return (
                             proposal_boxes,
                             outputs.predict_boxes(),
-                            outputs.predict_probs(), 
-                            feature_pooled.split(num_preds_per_image, dim=0), 
+                            outputs.predict_probs(),
+                            feature_pooled.split(num_preds_per_image, dim=0),
                             attr_scores.split(num_preds_per_image, dim=0)
                             )
                 else:
@@ -418,6 +419,7 @@ class BUADetectron2Res5ROIHeads(ROIHeads):
         # image_scales = images.image_scales
         del images
 
+        self.training = False
         if self.training:
             proposals = self.label_and_sample_proposals(proposals, targets)
         del targets
@@ -433,7 +435,7 @@ class BUADetectron2Res5ROIHeads(ROIHeads):
             pred_class_logits, pred_proposal_deltas = self.box_predictor(feature_pooled, proposals)
         if not self.extract_on:
             del feature_pooled
-            
+
         if self.attr_on:
             outputs = BUADetection2FastRCNNOutputs(
                 self.box2box_transform,

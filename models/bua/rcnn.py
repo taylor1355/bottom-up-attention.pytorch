@@ -68,6 +68,7 @@ class GeneralizedBUARCNN(nn.Module):
                 The :class:`Instances` object has the following keys:
                     "pred_boxes", "pred_classes", "scores", "pred_masks", "pred_keypoints"
         """
+        self.training = False
         if not self.training:
             return self.inference(batched_inputs)
 

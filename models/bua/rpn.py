@@ -148,6 +148,7 @@ class BUARPN(nn.Module):
             self.smooth_l1_beta,
         )
 
+        self.training = False
         if self.training:
             losses = {k: v * self.loss_weight for k, v in outputs.losses().items()}
         else:

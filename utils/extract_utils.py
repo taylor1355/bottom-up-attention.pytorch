@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import cv2
 import os
-import pdb 
+import pdb
 
 from models.bua.layers.nms import nms
 from models.bua.box_regression import BUABoxes
@@ -35,6 +35,9 @@ def get_image_blob(im, pixel_means):
         im_scale_factors (list): list of image scales (relative to im) used
             in the image pyramid
     """
+    if isinstance(im, torch.Tensor):
+        return get_image_blob_from_tensor(im, pixel_means)
+
     pixel_means = np.array([[pixel_means]])
     dataset_dict = {}
     im_orig = im.astype(np.float32, copy=True)
@@ -55,14 +58,36 @@ def get_image_blob(im, pixel_means):
     dataset_dict["image"] = torch.from_numpy(im).permute(2, 0, 1)
     dataset_dict["im_scale"] = im_scale
 
-    return dataset_dict
+    return [dataset_dict]
+
+def get_image_blob_from_tensor(im_batch, pixel_means):
+    pixel_means = torch.Tensor(pixel_means).reshape(1, -1, 1, 1).to(im_batch.device)
+
+    # Orignally, a copy of im was used here. Add that back if things break
+    im_batch = im_batch.subtract(pixel_means)
+
+    im_size_min = np.min(im_batch.shape[2:])
+    im_size_max = np.max(im_batch.shape[2:])
+
+    for target_size in TEST_SCALES:
+        im_scale = float(target_size) / float(im_size_min)
+        # Prevent the biggest axis from being more than MAX_SIZE
+        if np.round(im_scale * im_size_max) > TEST_MAX_SIZE:
+            im_scale = float(TEST_MAX_SIZE) / float(im_size_max)
+        im_batch = torch.nn.functional.interpolate(im_batch, scale_factor=im_scale, mode='bilinear')
+
+    dataset_dicts = []
+    for im in im_batch:
+        dataset_dicts.append({"image": im, "im_scale": im_scale})
+
+    return dataset_dicts
 
 
 def save_roi_features(args, cfg, im_file, im, dataset_dict, boxes, scores, features_pooled, attr_scores=None):
     MIN_BOXES = cfg.MODEL.BUA.EXTRACTOR.MIN_BOXES
     MAX_BOXES = cfg.MODEL.BUA.EXTRACTOR.MAX_BOXES
     CONF_THRESH = cfg.MODEL.BUA.EXTRACTOR.CONF_THRESH
-  
+
     dets = boxes[0] / dataset_dict['im_scale']
     scores = scores[0]
     feats = features_pooled[0]
@@ -74,7 +99,7 @@ def save_roi_features(args, cfg, im_file, im, dataset_dict, boxes, scores, featu
             max_conf[keep] = torch.where(cls_scores[keep] > max_conf[keep],
                                              cls_scores[keep],
                                              max_conf[keep])
-            
+
     keep_boxes = torch.nonzero(max_conf >= CONF_THRESH).flatten()
     if len(keep_boxes) < MIN_BOXES:
         keep_boxes = torch.argsort(max_conf, descending=True)[:MIN_BOXES]
@@ -135,7 +160,7 @@ def save_bbox(args, cfg, im_file, im, dataset_dict, boxes, scores):
             max_conf[keep] = torch.where(cls_scores[keep] > max_conf[keep],
                                              cls_scores[keep],
                                              max_conf[keep])
-            
+
     keep_boxes = torch.argsort(max_conf, descending=True)[:MAX_BOXES]
     image_bboxes = cls_boxes[keep_boxes]
 
@@ -182,4 +207,4 @@ def save_roi_features_by_bbox(args, cfg, im_file, im, dataset_dict, boxes, score
             }
     # pdb.set_trace()
     output_file = os.path.join(args.output_dir, image_id)
-    np.savez_compressed(output_file, x=image_feat, bbox=image_bboxes, num_bbox=len(keep_boxes), image_h=np.size(im, 0), image_w=np.size(im, 1), info=info) 
+    np.savez_compressed(output_file, x=image_feat, bbox=image_bboxes, num_bbox=len(keep_boxes), image_h=np.size(im, 0), image_w=np.size(im, 1), info=info)
